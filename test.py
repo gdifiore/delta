@@ -19,5 +19,5 @@ print("\nChanges in latest commit (Friendly Diff):")
 print(repo.show_friendly_diff(hash2))
 
 # Export a version
-repo.export_version(hash1, "document_v1_restored.docx")
-print("\nVersion exported: document_v1_restored.docx")
+#repo.export_version(hash1, "document_v1_restored.docx")
+#print("\nVersion exported: document_v1_restored.docx")
