@@ -14,6 +14,7 @@ from typing import List, Tuple
 import difflib
 import re
 from collections import defaultdict
+import gzip
 
 @dataclass
 class Delta:
@@ -62,19 +63,19 @@ class CombinedDiffer:
         """Normalize text for comparison (strip whitespace, lowercase)"""
         return re.sub(r'\s+', ' ', text.strip().lower())
 
-    def _find_moved_blocks(self, old_paragraphs: List[str], new_paragraphs: List[str], 
+    def _find_moved_blocks(self, old_paragraphs: List[str], new_paragraphs: List[str],
                           min_block_length: int = 5) -> Dict[str, TextBlock]:
         """Identify blocks of text that have been moved"""
         blocks = {}
-        
+
         old_normalized = [self._normalize_text(p) for p in old_paragraphs]
         new_normalized = [self._normalize_text(p) for p in new_paragraphs]
-        
+
         for old_idx, old_text in enumerate(old_paragraphs):
             old_words = old_text.split()
             if len(old_words) < min_block_length:
                 continue
-                
+
             old_norm = old_normalized[old_idx]
             for new_idx, new_norm in enumerate(new_normalized):
                 if old_norm == new_norm and old_idx != new_idx:
@@ -84,16 +85,16 @@ class CombinedDiffer:
                         new_position=new_idx
                     )
                     blocks[old_norm] = block
-                    
+
         return blocks
 
     def format_word_diff(self, old_text: str, new_text: str) -> str:
         """Generate a formatted word-level diff"""
         old_words = self._split_into_words(old_text)
         new_words = self._split_into_words(new_text)
-        
+
         matcher = difflib.SequenceMatcher(None, old_words, new_words)
-        
+
         result = []
         for op, i1, i2, j1, j2 in matcher.get_opcodes():
             if op == 'equal':
@@ -112,23 +113,23 @@ class CombinedDiffer:
         """Format diff showing both moved blocks and word-level changes"""
         result = []
         moved_blocks = self._find_moved_blocks(old_paragraphs, new_paragraphs)
-        
+
         moved_from_positions = {block.old_position for block in moved_blocks.values()}
         moved_to_positions = {block.new_position for block in moved_blocks.values()}
-        
+
         max_len = max(len(old_paragraphs), len(new_paragraphs))
         for i in range(max_len):
             #result.append(f"\n=== Paragraph {i+1} ===")
-            
+
             # Handle moves first
             if i in moved_from_positions:
                 result.append(self._color_text(f"MOVED FROM: {old_paragraphs[i]}", 'BLUE'))
                 continue
-                
+
             if i in moved_to_positions:
                 result.append(self._color_text(f"MOVED TO: {new_paragraphs[i]}", 'YELLOW'))
                 continue
-            
+
             # For non-moved paragraphs, show word-level diff
             if i < len(old_paragraphs) and i < len(new_paragraphs):
                 if old_paragraphs[i] != new_paragraphs[i]:
@@ -179,16 +180,34 @@ class DocxVersionStore:
 
     def _store_object(self, delta: Delta):
         object_path = self.objects_path / delta.hash
-        with open(object_path, 'w') as f:
-            json.dump(asdict(delta), f, indent=2)
+        # Convert to JSON and get uncompressed size
+        json_data = json.dumps(asdict(delta), indent=2)
+        uncompressed_size = len(json_data.encode('utf-8'))
+
+        # Compress and store
+        with gzip.open(object_path, 'wt', encoding='utf-8') as f:
+            f.write(json_data)
+        '''
+        # Get compressed size
+        compressed_size = object_path.stat().st_size
+
+        print(f"Delta {delta.hash} sizes:")
+        print(f"  Uncompressed: {uncompressed_size:,} bytes")
+        print(f"  Compressed:   {compressed_size:,} bytes")
+        print(f"  Ratio:        {compressed_size/uncompressed_size:.2%}")
+        '''
 
     def _load_object(self, hash_id: str) -> Optional[Delta]:
         object_path = self.objects_path / hash_id
         if not object_path.exists():
             return None
-        with open(object_path, 'r') as f:
-            data = json.load(f)
-            return Delta(**data)
+        try:
+            with gzip.open(object_path, 'rt', encoding='utf-8') as f:
+                data = json.load(f)
+                return Delta(**data)
+        except (gzip.BadGzipFile, json.JSONDecodeError) as e:
+            print(f"Error loading compressed delta: {e}")
+            return None
 
     def _update_ref(self, ref_name: str, hash_id: str):
         (self.refs_path / ref_name).write_text(hash_id)
@@ -214,7 +233,7 @@ class DocxVersionStore:
             parent_delta = self._load_object(head)
             if parent_delta:
                 diff = self._calculate_diff(parent_delta.content, content)
-        
+
         content_hash = self._calculate_hash(content)
         delta = Delta(
             timestamp=datetime.now().isoformat(),
@@ -278,21 +297,21 @@ class DocxVersionStore:
         delta = self._load_object(version_hash)
         if not delta or not delta.parent_hash:
             return "Initial version"
-        
+
         parent_delta = self._load_object(delta.parent_hash)
         if not parent_delta:
             return "Parent version not found"
 
         differ = CombinedDiffer()
-        
+
         # Add summary header
         result = []
         changes_summary = self._generate_changes_summary(parent_delta.content, delta.content)
         result.append(f"\n=== {changes_summary} ===\n")
-        
+
         # Add the combined diff
         result.append(differ.format_combined_diff(parent_delta.content, delta.content))
-        
+
         return '\n'.join(result)
 
     def compare_versions(self, hash1: str, hash2: str) -> List[str]:
