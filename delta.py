@@ -179,7 +179,7 @@ class DocxVersionStore:
         return list(difflib.unified_diff(old_content, new_content, fromfile='previous', tofile='current', lineterm=''))
 
     def _store_object(self, delta: Delta):
-        object_path = self.objects_path / f"{delta.hash}"
+        object_path = self.objects_path / delta.hash
         # Convert to JSON and get uncompressed size
         json_data = json.dumps(asdict(delta), indent=2)
         uncompressed_size = len(json_data.encode('utf-8'))
@@ -198,7 +198,7 @@ class DocxVersionStore:
         '''
 
     def _load_object(self, hash_id: str) -> Optional[Delta]:
-        object_path = self.objects_path / f"{hash_id}"
+        object_path = self.objects_path / hash_id
         if not object_path.exists():
             return None
         try:
