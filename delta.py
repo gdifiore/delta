@@ -1,20 +1,15 @@
+from enum import Enum
 from docx import Document
-import os
 import json
 import hashlib
 from datetime import datetime
-from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass, asdict, field
+from typing import Dict, List, Optional, Tuple, Type
 import difflib
 from pathlib import Path
-import shutil
-from dataclasses import dataclass
-from enum import Enum
-from typing import List, Tuple
-import difflib
-import re
-from collections import defaultdict
 import gzip
+import re
+
 
 @dataclass
 class Delta:
@@ -25,6 +20,7 @@ class Delta:
     message: str
     hash: str
 
+
 class ChangeType(Enum):
     ADDED = "+"
     REMOVED = "-"
@@ -32,17 +28,20 @@ class ChangeType(Enum):
     MOVED_TO = "→"
     UNCHANGED = " "
 
+
 @dataclass
 class TextBlock:
     content: str
     old_position: int = -1
     new_position: int = -1
 
+
 @dataclass
 class WordChange:
     type: ChangeType
     content: str
     position: int
+
 
 class CombinedDiffer:
     def __init__(self):
@@ -64,7 +63,7 @@ class CombinedDiffer:
         return re.sub(r'\s+', ' ', text.strip().lower())
 
     def _find_moved_blocks(self, old_paragraphs: List[str], new_paragraphs: List[str],
-                          min_block_length: int = 5) -> Dict[str, TextBlock]:
+                           min_block_length: int = 5) -> Dict[str, TextBlock]:
         """Identify blocks of text that have been moved"""
         blocks = {}
 
@@ -79,12 +78,13 @@ class CombinedDiffer:
             old_norm = old_normalized[old_idx]
             for new_idx, new_norm in enumerate(new_normalized):
                 if old_norm == new_norm and old_idx != new_idx:
-                    block = TextBlock(
-                        content=old_text,
-                        old_position=old_idx,
-                        new_position=new_idx
-                    )
-                    blocks[old_norm] = block
+                    # Skip if already mapped to avoid duplicates
+                    if old_norm in blocks:
+                        continue
+                    blocks[old_norm] = TextBlock(content=old_text,
+                                                 old_position=old_idx,
+                                                 new_position=new_idx
+                                                 )
 
         return blocks
 
@@ -100,12 +100,16 @@ class CombinedDiffer:
             if op == 'equal':
                 result.append(''.join(old_words[i1:i2]))
             elif op == 'delete':
-                result.append(self._color_text(''.join(old_words[i1:i2]), 'RED'))
+                result.append(self._color_text(
+                    ''.join(old_words[i1:i2]), 'RED'))
             elif op == 'insert':
-                result.append(self._color_text(''.join(new_words[j1:j2]), 'GREEN'))
+                result.append(self._color_text(
+                    ''.join(new_words[j1:j2]), 'GREEN'))
             elif op == 'replace':
-                result.append(self._color_text(''.join(old_words[i1:i2]), 'RED'))
-                result.append(self._color_text(''.join(new_words[j1:j2]), 'GREEN'))
+                result.append(self._color_text(
+                    ''.join(old_words[i1:i2]), 'RED'))
+                result.append(self._color_text(
+                    ''.join(new_words[j1:j2]), 'GREEN'))
 
         return ''.join(result)
 
@@ -114,38 +118,46 @@ class CombinedDiffer:
         result = []
         moved_blocks = self._find_moved_blocks(old_paragraphs, new_paragraphs)
 
-        moved_from_positions = {block.old_position for block in moved_blocks.values()}
-        moved_to_positions = {block.new_position for block in moved_blocks.values()}
+        moved_from_positions = {
+            block.old_position for block in moved_blocks.values()}
+        moved_to_positions = {
+            block.new_position for block in moved_blocks.values()}
 
-        max_len = max(len(old_paragraphs), len(new_paragraphs))
+        max_len = max(len(old_paragraphs) if old_paragraphs else 0,
+                      len(new_paragraphs) if new_paragraphs else 0)
         for i in range(max_len):
-            #result.append(f"\n=== Paragraph {i+1} ===")
+            # result.append(f"\n=== Paragraph {i+1} ===")
 
             # Handle moves first
             if i in moved_from_positions:
-                result.append(self._color_text(f"MOVED FROM: {old_paragraphs[i]}", 'BLUE'))
+                result.append(self._color_text(
+                    f"MOVED FROM: {old_paragraphs[i]}", 'BLUE'))
                 continue
 
             if i in moved_to_positions:
-                result.append(self._color_text(f"MOVED TO: {new_paragraphs[i]}", 'YELLOW'))
+                result.append(self._color_text(
+                    f"MOVED TO: {new_paragraphs[i]}", 'YELLOW'))
                 continue
 
             # For non-moved paragraphs, show word-level diff
             if i < len(old_paragraphs) and i < len(new_paragraphs):
                 if old_paragraphs[i] != new_paragraphs[i]:
-                    result.append(self.format_word_diff(old_paragraphs[i], new_paragraphs[i]))
+                    result.append(self.format_word_diff(
+                        old_paragraphs[i], new_paragraphs[i]))
                 else:
                     result.append(old_paragraphs[i])
             elif i < len(old_paragraphs):
                 result.append(self._color_text(f"{old_paragraphs[i]}", 'RED'))
             elif i < len(new_paragraphs):
-                result.append(self._color_text(f"{new_paragraphs[i]}", 'GREEN'))
+                result.append(self._color_text(
+                    f"{new_paragraphs[i]}", 'GREEN'))
 
         return '\n'.join(result)
 
     def _color_text(self, text: str, color: str) -> str:
         """Wrap text in color codes"""
         return f"{self.COLORS[color]}{text}{self.COLORS['RESET']}"
+
 
 class DocxVersionStore:
     def __init__(self, path: str = ".docx-versions"):
@@ -158,17 +170,17 @@ class DocxVersionStore:
             self.initialize_store()
         else:
             # Ensure expected subdirectories exist if the folder was manually created
-            self._validate_store()
+            self._ensure_store_structure()
 
-    def _validate_store(self):
-        """Ensures the store structure is intact if the folder already exists."""
+    def _ensure_store_structure(self) -> None:
+        """Ensure the store structure is intact or create it if missing."""
         missing_dirs = []
         if not self.objects_path.exists():
             missing_dirs.append(self.objects_path)
         if not self.refs_path.exists():
             missing_dirs.append(self.refs_path)
         if not self.head_path.exists():
-            self.head_path.write_text("")
+            self.head_path.touch()
 
         # Create any missing directories
         for directory in missing_dirs:
@@ -177,9 +189,9 @@ class DocxVersionStore:
     def initialize_store(self):
         if not self.root_path.exists():
             self.objects_path.mkdir(parents=True)
-            self.refs_path.mkdir()
-            self.head_path.write_text("")
-            (self.refs_path / "master").write_text("")
+            self.refs_path.mkdir(parents=True)
+            self.head_path.touch()
+            (self.refs_path / "master").touch()
 
     def _extract_content(self, docx_path: str) -> List[str]:
         doc = Document(docx_path)
@@ -187,31 +199,21 @@ class DocxVersionStore:
 
     def _calculate_hash(self, content: List[str]) -> str:
         hasher = hashlib.sha256()
-        for line in content:
-            hasher.update(line.encode())
+        hasher.update(''.join(content).encode('utf-8'))
         return hasher.hexdigest()[:8]
 
     def _calculate_diff(self, old_content: List[str], new_content: List[str]) -> List[str]:
         return list(difflib.unified_diff(old_content, new_content, fromfile='previous', tofile='current', lineterm=''))
 
     def _store_object(self, delta: Delta):
+        """Store a Delta object as compressed JSON."""
         object_path = self.objects_path / delta.hash
         # Convert to JSON and get uncompressed size
         json_data = json.dumps(asdict(delta), indent=2)
-        uncompressed_size = len(json_data.encode('utf-8'))
 
         # Compress and store
         with gzip.open(object_path, 'wt', encoding='utf-8') as f:
             f.write(json_data)
-        '''
-        # Get compressed size
-        compressed_size = object_path.stat().st_size
-
-        print(f"Delta {delta.hash} sizes:")
-        print(f"  Uncompressed: {uncompressed_size:,} bytes")
-        print(f"  Compressed:   {compressed_size:,} bytes")
-        print(f"  Ratio:        {compressed_size/uncompressed_size:.2%}")
-        '''
 
     def _load_object(self, hash_id: str) -> Optional[Delta]:
         object_path = self.objects_path / hash_id
@@ -221,9 +223,10 @@ class DocxVersionStore:
             with gzip.open(object_path, 'rt', encoding='utf-8') as f:
                 data = json.load(f)
                 return Delta(**data)
-        except (gzip.BadGzipFile, json.JSONDecodeError) as e:
-            print(f"Error loading compressed delta: {e}")
-            return None
+        except (gzip.BadGzipFile, json.JSONDecodeError, FileNotFoundError) as e:
+            # Raise exception instead of printing for proper error handling
+            raise ValueError(
+                f"Failed to load delta {hash_id}: {str(e)}") from e
 
     def _update_ref(self, ref_name: str, hash_id: str):
         (self.refs_path / ref_name).write_text(hash_id)
@@ -245,7 +248,7 @@ class DocxVersionStore:
         content = self._extract_content(docx_path)
         head = self._get_head()
         diff = []
-        if head:
+        if head and head.strip():  # Ensure head is not empty
             parent_delta = self._load_object(head)
             if parent_delta:
                 diff = self._calculate_diff(parent_delta.content, content)
@@ -270,7 +273,8 @@ class DocxVersionStore:
         while current:
             delta = self._load_object(current)
             if delta:
-                history.append((delta.hash, delta.message, datetime.fromisoformat(delta.timestamp)))
+                history.append((delta.hash, delta.message,
+                               datetime.fromisoformat(delta.timestamp)))
                 current = delta.parent_hash
             else:
                 break
@@ -298,9 +302,11 @@ class DocxVersionStore:
 
         summary_parts = []
         if added:
-            summary_parts.append(f"{added} line{'s' if added != 1 else ''} added")
+            summary_parts.append(
+                f"{added} line{'s' if added != 1 else ''} added")
         if removed:
-            summary_parts.append(f"{removed} line{'s' if removed != 1 else ''} removed")
+            summary_parts.append(
+                f"{removed} line{'s' if removed != 1 else ''} removed")
 
         if not summary_parts:
             if old_len != new_len:
@@ -314,23 +320,27 @@ class DocxVersionStore:
         if not delta or not delta.parent_hash:
             return "Initial version"
 
+        differ = CombinedDiffer()
+
+        # Add summary header
         parent_delta = self._load_object(delta.parent_hash)
         if not parent_delta:
             return "Parent version not found"
 
-        differ = CombinedDiffer()
-
-        # Add summary header
         result = []
-        changes_summary = self._generate_changes_summary(parent_delta.content, delta.content)
+        changes_summary = self._generate_changes_summary(
+            parent_delta.content, delta.content)
         result.append(f"\n=== {changes_summary} ===\n")
 
         # Add the combined diff
-        result.append(differ.format_combined_diff(parent_delta.content, delta.content))
+        result.append(differ.format_combined_diff(
+            parent_delta.content, delta.content))
 
         return '\n'.join(result)
 
     def compare_versions(self, hash1: str, hash2: str) -> List[str]:
-        content1 = self._load_object(hash1).content if self._load_object(hash1) else []
-        content2 = self._load_object(hash2).content if self._load_object(hash2) else []
+        content1 = self._load_object(
+            hash1).content if self._load_object(hash1) else []
+        content2 = self._load_object(
+            hash2).content if self._load_object(hash2) else []
         return self._calculate_diff(content1, content2)
