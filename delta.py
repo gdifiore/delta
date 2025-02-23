@@ -153,10 +153,26 @@ class DocxVersionStore:
         self.objects_path = self.root_path / "objects"
         self.refs_path = self.root_path / "refs"
         self.head_path = self.root_path / "HEAD"
-        if self.root_path.exists():
-            shutil.rmtree(self.root_path)
 
-        self.initialize_store()
+        if not self.root_path.exists():
+            self.initialize_store()
+        else:
+            # Ensure expected subdirectories exist if the folder was manually created
+            self._validate_store()
+
+    def _validate_store(self):
+        """Ensures the store structure is intact if the folder already exists."""
+        missing_dirs = []
+        if not self.objects_path.exists():
+            missing_dirs.append(self.objects_path)
+        if not self.refs_path.exists():
+            missing_dirs.append(self.refs_path)
+        if not self.head_path.exists():
+            self.head_path.write_text("")
+
+        # Create any missing directories
+        for directory in missing_dirs:
+            directory.mkdir(parents=True)
 
     def initialize_store(self):
         if not self.root_path.exists():
