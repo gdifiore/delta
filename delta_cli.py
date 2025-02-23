@@ -3,7 +3,8 @@ import sys
 from delta import DocxVersionStore
 
 
-def init_repo() -> None:
+def init_repo(store: DocxVersionStore) -> None:
+    #store = DocxVersionStore()
     print("Initialized new Docx version repository.")
 
 
